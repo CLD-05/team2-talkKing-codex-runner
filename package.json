@@ -1,0 +1,16 @@
+{
+  "name": "team2-talkking-codex-runner",
+  "version": "0.1.0",
+  "description": "Local Slack-approved Codex runner for TalkKing ErrorOps tasks.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "once": "node src/index.js --once",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@slack/web-api": "^7.9.3",
+    "dotenv": "^16.4.7"
+  }
+}
