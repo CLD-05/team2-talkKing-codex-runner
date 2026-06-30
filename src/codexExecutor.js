@@ -2,6 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { inspectPrompt } from "./safetyGuard.js";
+// 💡 다른 로직은 유지하고 AWS S3 SDK만 상단에 추가합니다.
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+
+// S3 클라이언트 초기화 (자격 증명은 환경변수나 IAM Role을 통해 자동 주입)
+const s3Client = new S3Client({ region: "ap-northeast-2" });
+const BUCKET_NAME = "team2-logs-bucket"; // 💡 실제 사용하시는 S3 버킷명으로 변경하세요.
 
 export class CodexExecutor {
   constructor(config) {
@@ -11,6 +17,29 @@ export class CodexExecutor {
   ensureDirs() {
     fs.mkdirSync(this.config.promptsDir, { recursive: true });
     fs.mkdirSync(this.config.logsDir, { recursive: true });
+  }
+
+  // 💡 S3로 로그를 밀어 넣는 헬퍼 메서드 추가 (다른 로직에 영향 없음)
+  async uploadToS3(logFile) {
+    try {
+      if (!fs.existsSync(logFile)) return;
+      
+      const fileName = path.basename(logFile);
+      const today = new Date().toISOString().split('T')[0];
+      const s3Key = `logs/${today}/${fileName}`;
+      const fileBuffer = fs.readFileSync(logFile);
+
+      const command = new PutObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: s3Key,
+        Body: fileBuffer,
+        ContentType: "text/plain",
+      });
+
+      await s3Client.send(command);
+    } catch (error) {
+      console.error(`[AWS S3 업로드 실패] 파일명: ${logFile}, 에러:`, error.message);
+    }
   }
 
   async execute(task) {
@@ -24,18 +53,27 @@ export class CodexExecutor {
     if (!safety.safe) {
       const message = `Blocked by safety guard: ${safety.matches.join(", ")}`;
       fs.writeFileSync(logFile, message, "utf8");
+      
+      // 💡 안전성 검사에 걸려 로그가 기록된 즉시 S3 업로드 실행
+      this.uploadToS3(logFile);
       return { ok: false, promptFile, logFile, summary: message };
     }
 
     if (this.config.codexExecutionMode !== "execute") {
       const summary = `Dry-run complete. Prompt written to ${promptFile}`;
       fs.writeFileSync(logFile, summary, "utf8");
+      
+      // 💡 드라이런 로그 기록 직후 S3 업로드 실행
+      this.uploadToS3(logFile);
       return { ok: true, promptFile, logFile, summary };
     }
 
     if (!this.config.codexArgsTemplate) {
       const message = "CODEX_ARGS_TEMPLATE is empty. Refusing to execute.";
       fs.writeFileSync(logFile, message, "utf8");
+      
+      // 💡 실행 거부 로그 기록 직후 S3 업로드 실행
+      this.uploadToS3(logFile);
       return { ok: false, promptFile, logFile, summary: message };
     }
 
@@ -60,7 +98,10 @@ export class CodexExecutor {
           shell: false
         });
       } catch (error) {
-        return finish(this.writeStartFailure(error, logFile, promptFile));
+        const result = this.writeStartFailure(error, logFile, promptFile);
+        // 💡 커맨드 시작 실패 로그 기록 즉시 S3 업로드 실행
+        this.uploadToS3(logFile);
+        return finish(result);
       }
 
       const chunks = [];
@@ -72,12 +113,18 @@ export class CodexExecutor {
       }
 
       child.on("error", (error) => {
-        finish(this.writeStartFailure(error, logFile, promptFile));
+        const result = this.writeStartFailure(error, logFile, promptFile);
+        // 💡 자식 프로세스 에러 발생 시 S3 업로드 실행
+        this.uploadToS3(logFile);
+        return finish(result);
       });
 
       child.on("close", (code) => {
         const output = Buffer.concat(chunks).toString("utf8");
         fs.writeFileSync(logFile, output, "utf8");
+        
+        // 💡 정상 혹은 비정상 종료로 최종 로그 출력이 완려된 후 S3 업로드 실행
+        this.uploadToS3(logFile);
         finish({
           ok: code === 0,
           promptFile,
