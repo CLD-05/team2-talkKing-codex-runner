@@ -34,6 +34,7 @@ export class CodexExecutor {
         Key: s3Key,
         Body: fileBuffer,
         ContentType: "text/plain",
+        ServerSideEncryption: "AES256",
       });
 
       await s3Client.send(command);
