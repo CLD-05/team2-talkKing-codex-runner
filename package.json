@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
     "@slack/web-api": "^7.9.3",
     "dotenv": "^16.4.7"
   }
